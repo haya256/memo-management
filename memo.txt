@@ -1,0 +1,3 @@
+はじめてのメモ。
+
+ここに書いた内容が https://haya256.github.io/memo-management/ に表示されます。

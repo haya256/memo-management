@@ -3,27 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
 <title>メモ</title>
 <style>
   body { max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; line-height: 1.7; }
   pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin: 0; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1; min-width: 0; font-size: 16px; padding: 6px 8px; }
+  button { font-size: 16px; padding: 6px 12px; }
   .error { color: #c00; }
+  [hidden] { display: none; }
 </style>
 </head>
 <body>
-<pre id="memo">読み込み中…</pre>
-<script>
-  const el = document.getElementById('memo');
-  fetch('memo.txt', { cache: 'no-store' })
-    .then(res => {
+<form id="unlock">
+  <input id="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
+  <button type="submit">開く</button>
+</form>
+<p id="status"></p>
+<pre id="memo" hidden></pre>
+<script type="module">
+  import { decryptMemo } from './memo-crypto.js';
+
+  const form = document.getElementById('unlock');
+  const input = document.getElementById('passphrase');
+  const status = document.getElementById('status');
+  const memo = document.getElementById('memo');
+
+  function showStatus(message, isError = false) {
+    status.textContent = message;
+    status.className = isError ? 'error' : '';
+  }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    showStatus('復号中…');
+    let data;
+    try {
+      const res = await fetch('memo.enc', { cache: 'no-store' });
       if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      return res.text();
-    })
-    .then(text => { el.textContent = text; })
-    .catch(err => {
-      el.textContent = 'メモを読み込めませんでした: ' + err.message;
-      el.className = 'error';
-    });
+      data = await res.json();
+    } catch (err) {
+      showStatus('メモを読み込めませんでした: ' + err.message, true);
+      return;
+    }
+    try {
+      memo.textContent = await decryptMemo(data, input.value);
+    } catch {
+      showStatus('パスフレーズが違います', true);
+      input.select();
+      return;
+    }
+    input.value = '';
+    form.hidden = true;
+    showStatus('');
+    memo.hidden = false;
+  });
 </script>
 </body>
 </html>

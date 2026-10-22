@@ -5,51 +5,15 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { encryptMemo, decryptMemo } from '../memo-crypto.js';
+import { getPassphrase } from './passphrase.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const SRC = root + 'data/memo.txt';
 const DEST = root + 'memo.enc';
 const MIN_LENGTH = 12;
 
-function promptHidden(question) {
-  return new Promise((resolve, reject) => {
-    const { stdin, stdout } = process;
-    if (!stdin.isTTY) return reject(new Error('端末から実行するか、MEMO_PASSPHRASE を設定してください'));
-    stdout.write(question);
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    let input = '';
-    const onData = ch => {
-      if (ch === '\r' || ch === '\n') {
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.off('data', onData);
-        stdout.write('\n');
-        resolve(input);
-      } else if (ch === '\u0003') {
-        stdout.write('\n');
-        process.exit(130);
-      } else if (ch === '\u007f' || ch === '\b') {
-        input = input.slice(0, -1);
-      } else {
-        input += ch;
-      }
-    };
-    stdin.on('data', onData);
-  });
-}
-
-async function getPassphrase() {
-  if (process.env.MEMO_PASSPHRASE) return process.env.MEMO_PASSPHRASE;
-  const first = await promptHidden('パスフレーズ: ');
-  const second = await promptHidden('もう一度: ');
-  if (first !== second) throw new Error('パスフレーズが一致しません');
-  return first;
-}
-
 const text = await readFile(SRC, 'utf8');
-const passphrase = await getPassphrase();
+const passphrase = await getPassphrase({ confirm: true });
 if (passphrase.length < MIN_LENGTH) {
   console.error(`パスフレーズは ${MIN_LENGTH} 文字以上にしてください`);
   process.exit(1);

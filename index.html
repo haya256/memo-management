@@ -7,12 +7,14 @@
 <title>メモ</title>
 <style>
   body { max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; line-height: 1.7; }
-  pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin: 0; }
-  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin: 0 0 16px; }
+  form, .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   input { flex: 1; min-width: 0; font-size: 16px; padding: 6px 8px; }
+  textarea { box-sizing: border-box; width: 100%; min-height: 60vh; font: inherit; font-size: 16px; padding: 8px; margin-bottom: 8px; }
   button { font-size: 16px; padding: 6px 12px; }
   .error { color: #c00; }
-  [hidden] { display: none; }
+  .note { font-size: 14px; color: #666; margin: 0 0 8px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -20,44 +22,196 @@
   <input id="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
   <button type="submit">開く</button>
 </form>
-<p id="status"></p>
-<pre id="memo" hidden></pre>
-<script type="module">
-  import { decryptMemo } from './memo-crypto.js';
 
-  const form = document.getElementById('unlock');
-  const input = document.getElementById('passphrase');
-  const status = document.getElementById('status');
-  const memo = document.getElementById('memo');
+<p id="status"></p>
+
+<section id="view" hidden>
+  <pre id="memo"></pre>
+  <div class="actions"><button id="edit">編集</button></div>
+</section>
+
+<section id="editor" hidden>
+  <textarea id="text"></textarea>
+  <div class="actions">
+    <button id="save">保存</button>
+    <button id="cancel" type="button">キャンセル</button>
+  </div>
+  <form id="token-form" hidden>
+    <p class="note">保存には GitHub のトークン（memo-management の Contents 読み書き権限）が必要です。パスフレーズで暗号化してこのブラウザに保存します。</p>
+    <input id="token" type="password" placeholder="github_pat_…" autocomplete="off" required>
+    <button type="submit">トークンを保存して続ける</button>
+  </form>
+</section>
+
+<script type="module">
+  import { encryptMemo, decryptMemo } from './memo-crypto.js';
+
+  const API = 'https://api.github.com/repos/haya256/memo-management/contents/memo.enc';
+  const TOKEN_KEY = 'memo-management:token';
+
+  const $ = id => document.getElementById(id);
+  const status = $('status');
+
+  let passphrase = null;
+  let token = null;
+  let loadedEnc = null; // 読み込んだ memo.enc の生テキスト（衝突検知に使う）
+  let text = '';
 
   function showStatus(message, isError = false) {
     status.textContent = message;
     status.className = isError ? 'error' : '';
   }
 
-  form.addEventListener('submit', async e => {
+  function showView() {
+    $('memo').textContent = text;
+    $('editor').hidden = true;
+    $('view').hidden = false;
+  }
+
+  function showEditor() {
+    $('text').value = text;
+    $('token-form').hidden = true;
+    $('view').hidden = true;
+    $('editor').hidden = false;
+    $('text').focus();
+  }
+
+  // --- トークン（パスフレーズで暗号化して localStorage に保存） ---
+
+  async function loadToken() {
+    let stored;
+    try { stored = localStorage.getItem(TOKEN_KEY); } catch { return null; }
+    if (!stored) return null;
+    try {
+      return await decryptMemo(JSON.parse(stored), passphrase);
+    } catch {
+      return null; // パスフレーズが変わった等。保存時に入れ直してもらう
+    }
+  }
+
+  async function storeToken(value) {
+    token = value;
+    try { localStorage.setItem(TOKEN_KEY, JSON.stringify(await encryptMemo(value, passphrase))); } catch {}
+  }
+
+  function forgetToken() {
+    token = null;
+    try { localStorage.removeItem(TOKEN_KEY); } catch {}
+  }
+
+  // --- GitHub API ---
+
+  async function github(method, body) {
+    const res = await fetch(API, {
+      method,
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: body && JSON.stringify(body),
+    });
+    if (res.status === 401 || res.status === 403) {
+      forgetToken();
+      throw new Error('トークンが無効か権限が足りません。入れ直してください');
+    }
+    if (res.status === 409) throw new Error('他の場所で更新されています。再読み込みしてください');
+    if (!res.ok) throw new Error(`GitHub API エラー: ${res.status}`);
+    return res.json();
+  }
+
+  async function fetchRemote() {
+    const file = await github('GET');
+    return { sha: file.sha, enc: atob(file.content.replace(/\n/g, '')) };
+  }
+
+  // --- 読み込み ---
+
+  async function fetchEnc() {
+    // トークンがあれば API から最新を取る（Pages は反映が 1 分ほど遅れる）
+    if (token) {
+      try { return (await fetchRemote()).enc; } catch {}
+    }
+    const res = await fetch('memo.enc', { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+    return res.text();
+  }
+
+  $('unlock').addEventListener('submit', async e => {
     e.preventDefault();
     showStatus('復号中…');
-    let data;
+    passphrase = $('passphrase').value;
+    token = await loadToken();
     try {
-      const res = await fetch('memo.enc', { cache: 'no-store' });
-      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      data = await res.json();
+      loadedEnc = await fetchEnc();
     } catch (err) {
       showStatus('メモを読み込めませんでした: ' + err.message, true);
       return;
     }
     try {
-      memo.textContent = await decryptMemo(data, input.value);
+      text = await decryptMemo(JSON.parse(loadedEnc), passphrase);
     } catch {
+      passphrase = null;
+      token = null;
       showStatus('パスフレーズが違います', true);
-      input.select();
+      $('passphrase').select();
       return;
     }
-    input.value = '';
-    form.hidden = true;
+    $('passphrase').value = '';
+    $('unlock').hidden = true;
     showStatus('');
-    memo.hidden = false;
+    showView();
+  });
+
+  // --- 編集・保存 ---
+
+  $('edit').addEventListener('click', showEditor);
+
+  $('cancel').addEventListener('click', () => {
+    if ($('text').value !== text && !confirm('変更を破棄しますか？')) return;
+    showStatus('');
+    showView();
+  });
+
+  async function save() {
+    if (!token) {
+      $('token-form').hidden = false;
+      $('token').focus();
+      return;
+    }
+    const newText = $('text').value;
+    $('save').disabled = true;
+    showStatus('保存中…');
+    try {
+      const remote = await fetchRemote();
+      if (remote.enc !== loadedEnc) throw new Error('他の場所で更新されています。内容を控えてから再読み込みしてください');
+      const newEnc = JSON.stringify(await encryptMemo(newText, passphrase), null, 2) + '\n';
+      await github('PUT', { message: 'Update memo', content: btoa(newEnc), sha: remote.sha });
+      loadedEnc = newEnc;
+      text = newText;
+      showStatus('保存しました（公開ページへの反映は 1 分ほどかかります）');
+      showView();
+    } catch (err) {
+      showStatus('保存できませんでした: ' + err.message, true);
+      if (!token) $('token-form').hidden = false;
+    } finally {
+      $('save').disabled = false;
+    }
+  }
+
+  $('save').addEventListener('click', save);
+
+  $('token-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    await storeToken($('token').value.trim());
+    $('token').value = '';
+    $('token-form').hidden = true;
+    save();
+  });
+
+  window.addEventListener('beforeunload', e => {
+    if (!$('editor').hidden && $('text').value !== text) e.preventDefault();
   });
 </script>
 </body>

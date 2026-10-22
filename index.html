@@ -19,7 +19,7 @@
 </head>
 <body>
 <form id="unlock">
-  <input id="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
+  <input id="passphrase" name="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
   <button type="submit">開く</button>
 </form>
 
@@ -38,7 +38,7 @@
   </div>
   <form id="token-form" hidden>
     <p class="note">保存には GitHub のトークン（memo-management の Contents 読み書き権限）が必要です。パスフレーズで暗号化してこのブラウザに保存します。</p>
-    <input id="token" type="password" placeholder="github_pat_…" autocomplete="off" required>
+    <input id="token" name="token" type="password" placeholder="github_pat_…" autocomplete="off" required>
     <button type="submit">トークンを保存して続ける</button>
   </form>
 </section>

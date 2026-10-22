@@ -15,10 +15,13 @@
   .error { color: #c00; }
   .note { font-size: 14px; color: #666; margin: 0 0 8px; }
   [hidden] { display: none !important; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>
 <body>
 <form id="unlock">
+  <!-- パスワードマネージャー用のユーザー名（画面には出さない） -->
+  <input class="visually-hidden" name="username" type="text" value="memo-management" autocomplete="username" tabindex="-1" aria-hidden="true">
   <input id="passphrase" name="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
   <button type="submit">開く</button>
 </form>

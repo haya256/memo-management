@@ -38,3 +38,7 @@ git add memo.enc && git commit -m "Update memo" && git push
 
 - 暗号文は誰でも取得できるため、安全性はパスフレーズの強さで決まる。長く推測しにくいもの（例: 単語4〜5個の組み合わせ）を使うこと。
 - パスフレーズを忘れるとメモは復元できない（平文は手元の `data/` にのみある）。
+
+## ライセンス
+
+[MIT License](LICENSE)

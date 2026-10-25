@@ -50,3 +50,32 @@ export async function decryptMemo(data, passphrase) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(data.iv) }, key, fromBase64(data.ct));
   return dec.decode(pt);
 }
+
+// --- 複数メモ ---
+// 暗号化する平文: { memos: [{ name, text }, ...] }（name は手元のファイル名から .txt を除いたもの）
+
+// 名前が不正なら例外を投げる
+export function validateName(name) {
+  if (!name) throw new Error('名前が空です');
+  if (/[\/\\]/.test(name)) throw new Error(`名前に / や \\ は使えません: ${name}`);
+  if (name.startsWith('.')) throw new Error(`名前を . で始めることはできません: ${name}`);
+}
+
+// 旧形式（テキスト1つ）なら "memo" という名前のメモ1つとして扱う
+export function parseMemos(plaintext) {
+  try {
+    const data = JSON.parse(plaintext);
+    if (Array.isArray(data?.memos)) return data.memos.map(({ name, text }) => ({ name, text }));
+  } catch {}
+  return [{ name: 'memo', text: plaintext }];
+}
+
+export function serializeMemos(memos) {
+  const names = new Set();
+  for (const { name } of memos) {
+    validateName(name);
+    if (names.has(name)) throw new Error(`同じ名前のメモがあります: ${name}`);
+    names.add(name);
+  }
+  return JSON.stringify({ memos: memos.map(({ name, text }) => ({ name, text })) });
+}

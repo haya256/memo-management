@@ -52,6 +52,8 @@ export async function decryptMemo(data, passphrase) {
 }
 
 // --- 複数メモ ---
+export const MIN_PASSPHRASE_LENGTH = 12;
+
 // 暗号化する平文: { memos: [{ name, text }, ...] }（name は手元のファイル名から .txt を除いたもの）
 
 // 名前が不正なら例外を投げる

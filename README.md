@@ -11,67 +11,39 @@
 - `tools/encrypt.mjs` — 手元の `data/*.txt`（平文・リポジトリ外、1メモ1ファイル）をまとめて暗号化して `memo.enc` を書き出す。ファイル名（`.txt` を除く）がメモの名前になる
 - `tools/decrypt.mjs` — `memo.enc` を復号して `data/<名前>.txt` に書き出す
 
-ビルドや依存パッケージは不要。手元のツールには Node.js 20 以降が必要。
+ビルドや依存パッケージは不要。手元のツールを使う場合だけ Node.js 20 以降が必要。
 
 ## セットアップ
 
-### 1. リポジトリを用意する
+GitHub アカウントがあれば、ブラウザだけでセットアップできる。
 
-このリポジトリを自分のアカウントに fork する（または clone して自分の新しいリポジトリに push する）。
-以下、自分のリポジトリを `<user>/<repo>` と書く。
+1. **リポジトリを作る** — このリポジトリの「Use this template」→「Create a new repository」（または fork）で、自分のアカウントにコピーを作る。Pages を無料プランで使うなら Public にする
+2. **作者の `memo.enc` を削除する** — 自分のリポジトリで `memo.enc` を開き、「…」→「Delete file」でコミットする。作者のメモ（暗号化済み）なので不要
+3. **GitHub Pages を有効にする** — Settings → Pages → Build and deployment で Source: Deploy from a branch、Branch: `main` / `/ (root)` を選ぶ。数分後に `https://<user>.github.io/<repo>/` で開けるようになる
+4. **パスフレーズを決める** — そのページを開くと、`memo.enc` がないので新しいパスフレーズの入力画面になる（12 文字以上）
+5. **最初のメモを保存する** — 「新規」でメモを書いて「保存」。トークンを求められるので、下記の手順で作って貼り付ける。保存すると `memo.enc` が作られる
 
-```sh
-git clone https://github.com/<user>/<repo>.git
-cd <repo>
-```
+保存先のリポジトリは、ページの URL（`<user>.github.io/<repo>/`）から自動で判定する。独自ドメインで公開する場合などは、`index.html` の `<meta name="memo-repo" content="">` に `owner/repo` を書く。
 
-### 2. 保存先のリポジトリを書き換える
-
-`index.html` の次の行を、自分のリポジトリに書き換える。ブラウザで保存したときのコミット先になる。
-
-```js
-const API = 'https://api.github.com/repos/<user>/<repo>/contents/memo.enc';
-```
-
-### 3. 自分のメモを暗号化する
-
-同梱の `memo.enc` は作者のものなので、自分のパスフレーズで作り直す。
-`data/` は `.gitignore` 済みなので平文はコミットされない。
-
-```sh
-mkdir -p data
-echo "はじめてのメモ" > data/memo.txt
-node tools/encrypt.mjs        # パスフレーズを2回入力（12文字以上・表示されない）
-git add index.html memo.enc
-git commit -m "Set up my memo"
-git push
-```
-
-### 4. GitHub Pages を有効にする
-
-GitHub のリポジトリ → Settings → Pages → Build and deployment
-- Source: Deploy from a branch
-- Branch: `main` / `/ (root)`
-
-数分後に `https://<user>.github.io/<repo>/` で開けるようになる。
-
-### 5. ブラウザから保存するためのトークンを作る
+### トークンの作り方
 
 GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token
 - Repository access: Only select repositories → 自分のリポジトリ
 - Permissions → Repository permissions → Contents: Read and write
 
-初回の保存時にこのトークンを求められる。トークンはパスフレーズで暗号化してブラウザの localStorage に保存される（ブラウザごとに1回入力）。
+トークンはパスフレーズで暗号化してブラウザの localStorage に保存される（ブラウザごとに1回入力）。
 
 ## メモの更新方法
 
 ### ブラウザから（ふだんはこちら）
 
-公開 URL を開き、パスフレーズを入力 → 一覧からメモを選んで「編集」→「保存」（「新規」で追加、編集画面の「削除」で削除）。
+`https://<user>.github.io/<repo>/` を開き、パスフレーズを入力 → 一覧からメモを選んで「編集」→「保存」（「新規」で追加、編集画面の「削除」で削除）。
 
 ### 手元から
 
 ```sh
+git clone https://github.com/<user>/<repo>.git   # 初回のみ
+cd <repo>
 git pull                      # ブラウザで保存した分を取り込む
 node tools/decrypt.mjs        # memo.enc → data/*.txt
 # data/ のファイルを編集・追加・削除してから（削除したファイルはメモからも消える）
@@ -84,8 +56,8 @@ git add memo.enc && git commit -m "Update memo" && git push
 ## 注意
 
 - 暗号文は誰でも取得できるため、安全性はパスフレーズの強さで決まる。長く推測しにくいもの（例: 単語4〜5個の組み合わせ）を使うこと。
-- パスフレーズを忘れるとメモは復元できない（平文は手元の `data/` にのみある）。
-- fork したリポジトリは公開リポジトリになる。`memo.enc` も公開される前提で使うこと。
+- パスフレーズを忘れるとメモは復元できない（平文が残るのは、手元のツールで書き出した `data/` だけ）。
+- Public リポジトリでは `memo.enc` もコミット履歴も誰でも見られる。過去の版の `memo.enc` も、当時のパスフレーズで復号できる。
 
 ## ライセンス
 

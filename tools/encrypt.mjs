@@ -5,13 +5,12 @@
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { encryptMemo, decryptMemo, serializeMemos } from '../memo-crypto.js';
+import { encryptMemo, decryptMemo, serializeMemos, MIN_PASSPHRASE_LENGTH } from '../memo-crypto.js';
 import { getPassphrase } from './passphrase.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const SRC_DIR = root + 'data/';
 const DEST = root + 'memo.enc';
-const MIN_LENGTH = 12;
 
 const files = (await readdir(SRC_DIR)).filter(f => f.endsWith('.txt')).sort();
 if (!files.length) {
@@ -25,8 +24,8 @@ const memos = await Promise.all(files.map(async f => ({
 const plaintext = serializeMemos(memos);
 
 const passphrase = await getPassphrase({ confirm: true });
-if (passphrase.length < MIN_LENGTH) {
-  console.error(`パスフレーズは ${MIN_LENGTH} 文字以上にしてください`);
+if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+  console.error(`パスフレーズは ${MIN_PASSPHRASE_LENGTH} 文字以上にしてください`);
   process.exit(1);
 }
 

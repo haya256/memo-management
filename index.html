@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<!-- ブラウザから保存する先のリポジトリ（owner/repo）。空なら <owner>.github.io/<repo>/ の URL から判定する -->
+<meta name="memo-repo" content="">
 <title>メモ</title>
 <style>
   body { max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; line-height: 1.7; }
@@ -16,16 +18,19 @@
   button { font-size: 16px; padding: 6px 12px; }
   .error { color: #c00; }
   .note { font-size: 14px; color: #666; margin: 0 0 8px; }
+  #setup-note { flex-basis: 100%; margin: 0; }
   [hidden] { display: none !important; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>
 <body>
 <form id="unlock">
+  <p id="setup-note" class="note" hidden></p>
   <!-- パスワードマネージャー用のユーザー名（画面には出さない） -->
-  <input class="visually-hidden" name="username" type="text" value="memo-management" autocomplete="username" tabindex="-1" aria-hidden="true">
+  <input class="visually-hidden" id="username" name="username" type="text" value="memo" autocomplete="username" tabindex="-1" aria-hidden="true">
   <input id="passphrase" name="passphrase" type="password" placeholder="パスフレーズ" autocomplete="current-password" autofocus required>
-  <button type="submit">開く</button>
+  <input id="passphrase2" name="passphrase2" type="password" placeholder="もう一度" autocomplete="new-password" hidden>
+  <button id="unlock-button" type="submit">開く</button>
 </form>
 
 <p id="status"></p>
@@ -53,17 +58,29 @@
     <button id="delete" type="button">削除</button>
   </div>
   <form id="token-form" hidden>
-    <p class="note">保存には GitHub のトークン（memo-management の Contents 読み書き権限）が必要です。パスフレーズで暗号化してこのブラウザに保存します。</p>
+    <p class="note" id="token-note"></p>
     <input id="token" name="token" type="password" placeholder="github_pat_…" autocomplete="off" data-1p-ignore required>
     <button type="submit">トークンを保存して続ける</button>
   </form>
 </section>
 
 <script type="module">
-  import { encryptMemo, decryptMemo, parseMemos, serializeMemos } from './memo-crypto.js';
+  import { encryptMemo, decryptMemo, parseMemos, serializeMemos, MIN_PASSPHRASE_LENGTH } from './memo-crypto.js';
 
-  const API = 'https://api.github.com/repos/haya256/memo-management/contents/memo.enc';
-  const TOKEN_KEY = 'memo-management:token';
+  // 保存先リポジトリ（owner/repo）。meta で指定がなければ GitHub Pages の URL から判定する
+  function detectRepo() {
+    const meta = document.querySelector('meta[name="memo-repo"]')?.content.trim();
+    if (meta) return meta;
+    const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
+    if (!m) return null;
+    const dir = location.pathname.split('/').slice(1, -1)[0];
+    return `${m[1]}/${dir || location.hostname}`; // ディレクトリなしならユーザーサイト（<owner>.github.io リポジトリ）
+  }
+
+  const REPO = detectRepo();
+  const API = REPO && `https://api.github.com/repos/${REPO}/contents/memo.enc`;
+  // 同じ <owner>.github.io の別リポジトリと localStorage を共有するので、リポジトリごとに分ける
+  const TOKEN_KEY = `memo-management:${REPO}:token`;
 
   const $ = id => document.getElementById(id);
   const status = $('status');
@@ -74,6 +91,10 @@
   let memos = [];       // [{ name, text }]
   let current = null;   // 表示・編集中のメモの添字（新規作成中は null）
   let pending = null;   // トークン入力後に続ける保存処理
+  let setup = false;    // memo.enc がまだない（初回セットアップ）
+
+  if (REPO) $('username').value = REPO.split('/')[1];
+  $('token-note').textContent = `保存には GitHub のトークン（${REPO} の Contents 読み書き権限）が必要です。パスフレーズで暗号化してこのブラウザに保存します。`;
 
   function showStatus(message, isError = false) {
     status.textContent = message;
@@ -157,6 +178,7 @@
       },
       body: body && JSON.stringify(body),
     });
+    if (res.status === 404 && method === 'GET') return null;
     if (res.status === 401 || res.status === 403) {
       forgetToken();
       throw new Error('トークンが無効か権限が足りません。入れ直してください');
@@ -168,28 +190,58 @@
 
   async function fetchRemote() {
     const file = await github('GET');
-    return { sha: file.sha, enc: atob(file.content.replace(/\n/g, '')) };
+    return file && { sha: file.sha, enc: atob(file.content.replace(/\n/g, '')) };
   }
 
   // --- 読み込み ---
 
+  // memo.enc がなければ null
   async function fetchEnc() {
     // トークンがあれば API から最新を取る（Pages は反映が 1 分ほど遅れる）
     if (token) {
-      try { return (await fetchRemote()).enc; } catch {}
+      try {
+        const remote = await fetchRemote();
+        if (remote) return remote.enc;
+      } catch {}
     }
     const res = await fetch('memo.enc', { cache: 'no-store' });
+    if (res.status === 404) return null;
     if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
     return res.text();
   }
 
+  function enterSetup() {
+    setup = true;
+    $('setup-note').textContent = `メモがまだありません。新しいパスフレーズを決めてください（${MIN_PASSPHRASE_LENGTH} 文字以上。忘れるとメモは復元できません）。`;
+    $('setup-note').hidden = false;
+    $('passphrase').autocomplete = 'new-password';
+    $('passphrase2').hidden = false;
+    $('passphrase2').required = true;
+    $('unlock-button').textContent = 'はじめる';
+  }
+
+  async function startSetup() {
+    const value = $('passphrase').value;
+    if (value.length < MIN_PASSPHRASE_LENGTH) return showStatus(`パスフレーズは ${MIN_PASSPHRASE_LENGTH} 文字以上にしてください`, true);
+    if (value !== $('passphrase2').value) return showStatus('パスフレーズが一致しません', true);
+    passphrase = value;
+    token = await loadToken();
+    loadedEnc = null;
+    memos = [];
+    $('unlock').hidden = true;
+    showStatus('「新規」からメモを作ってください。最初の保存で memo.enc が作られます');
+    showList();
+  }
+
   $('unlock').addEventListener('submit', async e => {
     e.preventDefault();
+    if (setup) return startSetup();
     showStatus('復号中…');
     passphrase = $('passphrase').value;
     token = await loadToken();
     try {
       loadedEnc = await fetchEnc();
+      if (loadedEnc === null) throw new Error('memo.enc がありません');
     } catch (err) {
       showStatus('メモを読み込めませんでした: ' + err.message, true);
       return;
@@ -223,6 +275,10 @@
 
   // newMemos を暗号化して memo.enc をコミットし、成功したら done() を呼ぶ
   async function commit(newMemos, message, done) {
+    if (!API) {
+      showStatus('保存先のリポジトリがわかりません。index.html の memo-repo に owner/repo を設定してください', true);
+      return;
+    }
     if (!token) {
       pending = () => commit(newMemos, message, done);
       $('token-form').hidden = false;
@@ -234,9 +290,9 @@
     try {
       const plaintext = serializeMemos(newMemos);
       const remote = await fetchRemote();
-      if (remote.enc !== loadedEnc) throw new Error('他の場所で更新されています。内容を控えてから再読み込みしてください');
+      if ((remote?.enc ?? null) !== loadedEnc) throw new Error('他の場所で更新されています。内容を控えてから再読み込みしてください');
       const newEnc = JSON.stringify(await encryptMemo(plaintext, passphrase), null, 2) + '\n';
-      await github('PUT', { message, content: btoa(newEnc), sha: remote.sha });
+      await github('PUT', { message, content: btoa(newEnc), sha: remote?.sha }); // sha なしなら新規作成
       loadedEnc = newEnc;
       memos = newMemos;
       showStatus('保存しました（公開ページへの反映は 1 分ほどかかります）');
@@ -281,6 +337,10 @@
   window.addEventListener('beforeunload', e => {
     if (!$('editor').hidden && isDirty()) e.preventDefault();
   });
+
+  try {
+    if (await fetchEnc() === null) enterSetup();
+  } catch {} // 開くときに改めて読み込んでエラーを出す
 </script>
 </body>
 </html>

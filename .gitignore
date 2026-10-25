@@ -6,3 +6,9 @@ config/
 
 # ユーザーデータ（非公開）
 data/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/

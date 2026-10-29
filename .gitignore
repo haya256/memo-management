@@ -12,3 +12,8 @@ data/
 
 # Node
 node_modules/
+
+# エディタの一時ファイル
+*.swp
+*.swo
+*~

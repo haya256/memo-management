@@ -26,7 +26,10 @@
   #reader-viewport { position: absolute; left: 0; right: 0; top: calc(28px + env(safe-area-inset-top)); bottom: calc(36px + env(safe-area-inset-bottom)); overflow: hidden; }
   #reader-content { position: absolute; top: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--memo-font-size); line-height: 1.8; column-fill: auto; will-change: transform; }
   #reader-page { position: absolute; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; color: #888; }
-  #reader-menu { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; background: #fff; border-bottom: 1px solid #ddd; }
+  #reader-menu { position: absolute; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; background: #fff; border-bottom: 1px solid #ddd; }
+  #reader-speech { flex-basis: 100%; display: flex; gap: 8px; align-items: center; }
+  #reader-speech select { font-size: 16px; padding: 5px 4px; min-width: 0; }
+  #speech-voice { flex: 1; }
   #reader-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
@@ -68,6 +71,17 @@
     <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
     <button class="font-larger" type="button" aria-label="文字を大きく" title="文字を大きく">A+</button>
     <button id="reader-close" type="button">閉じる</button>
+    <div id="reader-speech">
+      <button id="speech-toggle" type="button">▶ 読み上げ</button>
+      <select id="speech-rate" aria-label="読み上げの速さ">
+        <option value="0.7">遅い</option>
+        <option value="1" selected>ふつう</option>
+        <option value="1.3">速い</option>
+        <option value="1.6">もっと速い</option>
+        <option value="2">最速</option>
+      </select>
+      <select id="speech-voice" aria-label="読み上げの声"></select>
+    </div>
   </div>
 </div>
 
@@ -302,6 +316,7 @@
   }
 
   function closeReader() {
+    stopSpeech();
     readerOn = false;
     drag = null;
     reader.hidden = true;
@@ -313,13 +328,13 @@
   // 画面の左右 3 割をタップでめくる。真ん中はメニューの表示・非表示
   function tap(x) {
     const w = reader.clientWidth;
-    if (x < w * 0.3) goTo(page - 1);
-    else if (x > w * 0.7) goTo(page + 1);
+    if (x < w * 0.3) turn(page - 1);
+    else if (x > w * 0.7) turn(page + 1);
     else $('reader-menu').hidden = !$('reader-menu').hidden;
   }
 
   reader.addEventListener('pointerdown', e => {
-    if (!e.isPrimary || e.target.closest('button')) return;
+    if (!e.isPrimary || e.target.closest('#reader-menu')) return;
     drag = { x: e.clientX, y: e.clientY, t: e.timeStamp, moving: false };
     reader.setPointerCapture(e.pointerId);
   });
@@ -339,7 +354,7 @@
     drag = null;
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return tap(e.clientX);
     const flick = Math.abs(dx) > stride * 0.2 || (Math.abs(dx) > 30 && dt < 300);
-    goTo(Math.abs(dx) > Math.abs(dy) && flick ? page + (dx < 0 ? 1 : -1) : page);
+    turn(Math.abs(dx) > Math.abs(dy) && flick ? page + (dx < 0 ? 1 : -1) : page);
   });
 
   reader.addEventListener('pointercancel', () => {
@@ -350,10 +365,113 @@
 
   document.addEventListener('keydown', e => {
     if (!readerOn) return;
-    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); goTo(page + 1); }
-    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); goTo(page - 1); }
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); turn(page + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); turn(page - 1); }
     else if (e.key === 'Escape') closeReader();
   });
+
+  // --- 読み上げ（Web Speech API） ---
+  // 今のページの先頭から 1 文ずつ読み、読んでいる文のページへ自動でめくる
+
+  const synth = window.speechSynthesis;
+  const RATE_KEY = `memo-management:${REPO}:speechRate`;
+  const VOICE_KEY = `memo-management:${REPO}:speechVoice`;
+  let speaking = false;
+  let speechGen = 0; // 読み上げを止めたり始め直したりするたびに増やし、古い発話のイベントを無視する
+
+  if (!synth) $('reader-speech').hidden = true;
+
+  try { $('speech-rate').value = localStorage.getItem(RATE_KEY) || '1'; } catch {}
+  if (!$('speech-rate').value) $('speech-rate').value = '1';
+
+  function loadVoices() {
+    const sel = $('speech-voice');
+    let saved = sel.value;
+    try { saved ||= localStorage.getItem(VOICE_KEY) || ''; } catch {}
+    const voices = synth.getVoices().filter(v => v.lang.replace('_', '-').toLowerCase().startsWith('ja'));
+    sel.replaceChildren(new Option('標準の声', ''), ...voices.map(v => new Option(v.name, v.voiceURI)));
+    sel.value = voices.some(v => v.voiceURI === saved) ? saved : '';
+  }
+
+  if (synth) {
+    loadVoices();
+    synth.addEventListener?.('voiceschanged', loadVoices);
+  }
+
+  for (const [id, key] of [['speech-rate', RATE_KEY], ['speech-voice', VOICE_KEY]]) {
+    $(id).addEventListener('change', () => {
+      try { localStorage.setItem(key, $(id).value); } catch {}
+      if (speaking) startSpeech(); // 今読んでいるページの頭から新しい設定で読み直す
+    });
+  }
+
+  // from 以降の次の 1 文（句点・改行まで。長すぎる文は 200 文字で切る）
+  function nextChunk(from) {
+    const t = rc.firstChild?.data ?? '';
+    let i = from;
+    while (i < t.length && /\s/.test(t[i])) i++;
+    if (i >= t.length) return null;
+    let end = i;
+    while (end < t.length && end - i < 200) {
+      if ('。！？!?\n'.includes(t[end++])) {
+        while (end < t.length && '」』）)。！？!?'.includes(t[end])) end++;
+        break;
+      }
+    }
+    return { start: i, end };
+  }
+
+  function speakFrom(pos, gen) {
+    if (gen !== speechGen) return;
+    const chunk = nextChunk(pos);
+    if (!chunk) return stopSpeech();
+    const c = colAt(chunk.start);
+    if (c !== null && c > page) goTo(c);
+    const u = new SpeechSynthesisUtterance(rc.firstChild.data.slice(chunk.start, chunk.end));
+    u.lang = 'ja-JP';
+    u.rate = Number($('speech-rate').value) || 1;
+    const voice = synth.getVoices().find(v => v.voiceURI === $('speech-voice').value);
+    if (voice) u.voice = voice;
+    // 文の途中でページが変わるときは、読んでいる単語の位置でめくる（対応しているブラウザのみ）
+    u.onboundary = e => {
+      if (gen !== speechGen) return;
+      const c = colAt(chunk.start + e.charIndex);
+      if (c !== null && c > page) goTo(c);
+    };
+    u.onend = () => speakFrom(chunk.end, gen);
+    u.onerror = () => { if (gen === speechGen) stopSpeech(); };
+    synth.speak(u);
+  }
+
+  function updateSpeechButton() {
+    $('speech-toggle').textContent = speaking ? '■ 停止' : '▶ 読み上げ';
+  }
+
+  function startSpeech() {
+    synth.cancel();
+    speaking = true;
+    updateSpeechButton();
+    speakFrom(offsetForPage(page), ++speechGen);
+  }
+
+  function stopSpeech() {
+    speechGen++;
+    if (!speaking) return;
+    speaking = false;
+    synth?.cancel();
+    updateSpeechButton();
+  }
+
+  // 手でめくったとき。読み上げ中なら、めくった先のページの頭から読み直す
+  function turn(p) {
+    const before = page;
+    goTo(p);
+    if (speaking && page !== before) startSpeech();
+  }
+
+  $('speech-toggle').addEventListener('click', () => speaking ? stopSpeech() : startSpeech());
+  // 画面ロックや別アプリへの切り替えで読み上げは止まるので、こちらも停止の状態にしておく
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopSpeech(); });
 
   new ResizeObserver(() => { if (readerOn) layoutReader(); }).observe(rv);
   $('read').addEventListener('click', openReader);

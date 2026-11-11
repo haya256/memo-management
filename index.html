@@ -21,6 +21,13 @@
   .note { font-size: 14px; color: #666; margin: 0 0 8px; }
   #setup-note { flex-basis: 100%; margin: 0; }
   [hidden] { display: none !important; }
+  /* 読書モード */
+  #reader { position: fixed; inset: 0; z-index: 10; background: #fff; color: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #reader-viewport { position: absolute; left: 0; right: 0; top: calc(28px + env(safe-area-inset-top)); bottom: calc(36px + env(safe-area-inset-bottom)); overflow: hidden; }
+  #reader-content { position: absolute; top: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--memo-font-size); line-height: 1.8; column-fill: auto; will-change: transform; }
+  #reader-page { position: absolute; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; color: #888; }
+  #reader-menu { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; background: #fff; border-bottom: 1px solid #ddd; }
+  #reader-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>
@@ -46,11 +53,23 @@
   <pre id="memo"></pre>
   <div class="actions">
     <button id="edit">編集</button>
+    <button id="read" type="button">読書</button>
     <button id="back" type="button">一覧へ戻る</button>
     <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
     <button class="font-larger" type="button" aria-label="文字を大きく" title="文字を大きく">A+</button>
   </div>
 </section>
+
+<div id="reader" hidden>
+  <div id="reader-viewport"><div id="reader-content"></div></div>
+  <div id="reader-page"></div>
+  <div id="reader-menu">
+    <span id="reader-title"></span>
+    <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
+    <button class="font-larger" type="button" aria-label="文字を大きく" title="文字を大きく">A+</button>
+    <button id="reader-close" type="button">閉じる</button>
+  </div>
+</div>
 
 <section id="editor" hidden>
   <input id="name" name="memo-name" type="text" placeholder="名前" autocomplete="off" data-1p-ignore>
@@ -117,6 +136,7 @@
   function changeFontSize(delta) {
     fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize + delta));
     applyFontSize();
+    if (readerOn) layoutReader();
     try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch {}
   }
 
@@ -172,6 +192,172 @@
     const memo = current === null ? { name: '', text: '' } : memos[current];
     return $('name').value !== memo.name || $('text').value !== memo.text;
   }
+
+  // --- 読書モード ---
+  // 本文を CSS の段組みで「1 段 = 1 画面」に流し込み、段の幅ずつ横にずらしてページをめくる
+
+  const reader = $('reader');
+  const rv = $('reader-viewport');
+  const rc = $('reader-content');
+  const POS_KEY = `memo-management:${REPO}:reading`;
+  const range = document.createRange();
+  let readerOn = false;
+  let page = 0, pages = 1;
+  let stride = 0;       // 1 ページ分の横幅（px）
+  let anchor = 0;       // 今のページの先頭の文字位置。文字サイズや画面幅が変わってもここを含むページを表示する
+  let readerKey = null; // 読んだ位置を保存するキー（メモ名のハッシュ。名前そのものはブラウザに残さない）
+  let drag = null;
+
+  const textLength = () => rc.firstChild?.length ?? 0;
+
+  // 文字 i がある段（ページ）。改行などで位置が取れない文字は次の文字で見る
+  function colAt(i) {
+    const node = rc.firstChild, n = textLength(), origin = rc.getBoundingClientRect().left;
+    for (; i < n; i++) {
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      const r = range.getClientRects()[0];
+      if (r) return Math.floor((r.left - origin + 1) / stride);
+    }
+    return null;
+  }
+
+  function lastCol() {
+    const node = rc.firstChild, origin = rc.getBoundingClientRect().left;
+    for (let i = textLength() - 1; i >= 0; i--) {
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      const r = range.getClientRects()[0];
+      if (r) return Math.floor((r.left - origin + 1) / stride);
+    }
+    return 0;
+  }
+
+  // ページ p の先頭の文字位置（二分探索）
+  function offsetForPage(p) {
+    let lo = 0, hi = textLength();
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1, c = colAt(mid);
+      if (c === null || c >= p) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  function setTranslate(x, animate) {
+    rc.style.transition = animate ? 'transform .3s ease-out' : 'none';
+    rc.style.transform = `translateX(${x}px)`;
+  }
+
+  function layoutReader() {
+    const w = rv.clientWidth, h = rv.clientHeight;
+    if (!w || !h) return;
+    const pad = Math.min(32, Math.max(16, Math.round(w * 0.06)));
+    stride = w; // 段の幅 + 段の間隔 = 画面幅。左右の余白が隣のページとの間隔になる
+    Object.assign(rc.style, {
+      left: `${pad}px`, width: `${w - 2 * pad}px`, height: `${h}px`,
+      columnWidth: `${w - 2 * pad}px`, columnGap: `${2 * pad}px`,
+    });
+    const n = textLength();
+    pages = n ? lastCol() + 1 : 1;
+    page = n ? Math.min(pages - 1, colAt(Math.min(anchor, n - 1)) ?? pages - 1) : 0;
+    setTranslate(-page * stride, false);
+    $('reader-page').textContent = `${page + 1} / ${pages}`;
+  }
+
+  function loadPositions() {
+    try { return JSON.parse(localStorage.getItem(POS_KEY)) || {}; } catch { return {}; }
+  }
+
+  function goTo(p) {
+    p = Math.max(0, Math.min(pages - 1, p));
+    if (p !== page) $('reader-menu').hidden = true; // めくったらメニューを閉じる（真ん中のタップでまた出る）
+    page = p;
+    setTranslate(-page * stride, true);
+    anchor = offsetForPage(page);
+    $('reader-page').textContent = `${page + 1} / ${pages}`;
+    if (readerKey) {
+      const positions = loadPositions();
+      positions[readerKey] = anchor;
+      try { localStorage.setItem(POS_KEY, JSON.stringify(positions)); } catch {}
+    }
+  }
+
+  async function memoKey(name) {
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(name));
+    return btoa(String.fromCharCode(...new Uint8Array(hash))).slice(0, 22);
+  }
+
+  async function openReader() {
+    const memo = memos[current];
+    readerKey = await memoKey(memo.name);
+    anchor = Math.min(Number(loadPositions()[readerKey]) || 0, memo.text.length);
+    rc.textContent = memo.text;
+    $('reader-title').textContent = memo.name;
+    $('reader-menu').hidden = false;
+    reader.hidden = false;
+    readerOn = true;
+    document.body.style.overflow = 'hidden';
+    document.activeElement?.blur();
+    layoutReader();
+  }
+
+  function closeReader() {
+    readerOn = false;
+    drag = null;
+    reader.hidden = true;
+    rc.textContent = '';
+    document.body.style.overflow = '';
+    $('read').focus();
+  }
+
+  // 画面の左右 3 割をタップでめくる。真ん中はメニューの表示・非表示
+  function tap(x) {
+    const w = reader.clientWidth;
+    if (x < w * 0.3) goTo(page - 1);
+    else if (x > w * 0.7) goTo(page + 1);
+    else $('reader-menu').hidden = !$('reader-menu').hidden;
+  }
+
+  reader.addEventListener('pointerdown', e => {
+    if (!e.isPrimary || e.target.closest('button')) return;
+    drag = { x: e.clientX, y: e.clientY, t: e.timeStamp, moving: false };
+    reader.setPointerCapture(e.pointerId);
+  });
+
+  reader.addEventListener('pointermove', e => {
+    if (!drag) return;
+    let dx = e.clientX - drag.x;
+    if (!drag.moving && Math.abs(dx) < 5) return;
+    drag.moving = true;
+    if ((page === 0 && dx > 0) || (page === pages - 1 && dx < 0)) dx /= 3; // 端では引っ張りを重くする
+    setTranslate(-page * stride + dx, false);
+  });
+
+  reader.addEventListener('pointerup', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y, dt = e.timeStamp - drag.t;
+    drag = null;
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return tap(e.clientX);
+    const flick = Math.abs(dx) > stride * 0.2 || (Math.abs(dx) > 30 && dt < 300);
+    goTo(Math.abs(dx) > Math.abs(dy) && flick ? page + (dx < 0 ? 1 : -1) : page);
+  });
+
+  reader.addEventListener('pointercancel', () => {
+    if (!drag) return;
+    drag = null;
+    goTo(page);
+  });
+
+  document.addEventListener('keydown', e => {
+    if (!readerOn) return;
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); goTo(page + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); goTo(page - 1); }
+    else if (e.key === 'Escape') closeReader();
+  });
+
+  new ResizeObserver(() => { if (readerOn) layoutReader(); }).observe(rv);
+  $('read').addEventListener('click', openReader);
+  $('reader-close').addEventListener('click', closeReader);
 
   // --- トークン（パスフレーズで暗号化して localStorage に保存） ---
 

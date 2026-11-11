@@ -8,13 +8,14 @@
 <meta name="memo-repo" content="">
 <title>メモ</title>
 <style>
+  :root { --memo-font-size: 16px; }
   body { max-width: 720px; margin: 0 auto; padding: 16px; font-family: system-ui, sans-serif; line-height: 1.7; }
-  pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin: 0 0 16px; }
+  pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; font-size: var(--memo-font-size); margin: 0 0 16px; }
   form, .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   input { flex: 1; min-width: 0; font-size: 16px; padding: 6px 8px; }
   #name { box-sizing: border-box; width: 100%; margin-bottom: 8px; }
   h1 { font-size: 20px; margin: 0 0 8px; }
-  textarea { box-sizing: border-box; width: 100%; min-height: 60vh; font: inherit; font-size: 16px; padding: 8px; margin-bottom: 8px; }
+  textarea { box-sizing: border-box; width: 100%; min-height: 60vh; font: inherit; font-size: max(16px, var(--memo-font-size)); padding: 8px; margin-bottom: 8px; }
   button { font-size: 16px; padding: 6px 12px; }
   .error { color: #c00; }
   .note { font-size: 14px; color: #666; margin: 0 0 8px; }
@@ -46,6 +47,8 @@
   <div class="actions">
     <button id="edit">編集</button>
     <button id="back" type="button">一覧へ戻る</button>
+    <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
+    <button class="font-larger" type="button" aria-label="文字を大きく" title="文字を大きく">A+</button>
   </div>
 </section>
 
@@ -56,6 +59,8 @@
     <button id="save">保存</button>
     <button id="cancel" type="button">キャンセル</button>
     <button id="delete" type="button">削除</button>
+    <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
+    <button class="font-larger" type="button" aria-label="文字を大きく" title="文字を大きく">A+</button>
   </div>
   <form id="token-form" hidden>
     <p class="note" id="token-note"></p>
@@ -92,6 +97,32 @@
   let current = null;   // 表示・編集中のメモの添字（新規作成中は null）
   let pending = null;   // トークン入力後に続ける保存処理
   let setup = false;    // memo.enc がまだない（初回セットアップ）
+
+  // --- 本文の文字サイズ（このブラウザに保存） ---
+
+  const FONT_KEY = `memo-management:${REPO}:fontSize`;
+  const FONT_MIN = 12, FONT_MAX = 32, FONT_STEP = 2, FONT_DEFAULT = 16;
+  let fontSize = FONT_DEFAULT;
+  try {
+    const n = Number(localStorage.getItem(FONT_KEY));
+    if (n >= FONT_MIN && n <= FONT_MAX) fontSize = n;
+  } catch {}
+
+  function applyFontSize() {
+    document.documentElement.style.setProperty('--memo-font-size', `${fontSize}px`);
+    for (const b of document.querySelectorAll('.font-smaller')) b.disabled = fontSize <= FONT_MIN;
+    for (const b of document.querySelectorAll('.font-larger')) b.disabled = fontSize >= FONT_MAX;
+  }
+
+  function changeFontSize(delta) {
+    fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize + delta));
+    applyFontSize();
+    try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch {}
+  }
+
+  for (const b of document.querySelectorAll('.font-smaller')) b.addEventListener('click', () => changeFontSize(-FONT_STEP));
+  for (const b of document.querySelectorAll('.font-larger')) b.addEventListener('click', () => changeFontSize(FONT_STEP));
+  applyFontSize();
 
   if (REPO) $('username').value = REPO.split('/')[1];
   $('token-note').textContent = `保存には GitHub のトークン（${REPO} の Contents 読み書き権限）が必要です。パスフレーズで暗号化してこのブラウザに保存します。`;

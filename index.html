@@ -27,7 +27,7 @@
   #reader-content { position: absolute; top: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--memo-font-size); line-height: 1.8; column-fill: auto; will-change: transform; }
   #reader-page { position: absolute; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; color: #888; }
   #reader-menu { position: absolute; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; background: #fff; border-bottom: 1px solid #ddd; }
-  #reader-speech { flex-basis: 100%; display: flex; gap: 8px; align-items: center; }
+  #reader-speech { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   #reader-speech select { font-size: 16px; padding: 5px 4px; min-width: 0; }
   #speech-voice { flex: 1; }
   #reader-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
@@ -79,6 +79,13 @@
         <option value="1.3">速い</option>
         <option value="1.6">もっと速い</option>
         <option value="2">最速</option>
+      </select>
+      <select id="speech-pause" aria-label="文と文のあいだの間">
+        <option value="0">間なし</option>
+        <option value="400">間 少し</option>
+        <option value="800" selected>間 ふつう</option>
+        <option value="1500">間 長め</option>
+        <option value="2500">間 とても長め</option>
       </select>
       <select id="speech-voice" aria-label="読み上げの声"></select>
     </div>
@@ -376,6 +383,7 @@
   const synth = window.speechSynthesis;
   const RATE_KEY = `memo-management:${REPO}:speechRate`;
   const VOICE_KEY = `memo-management:${REPO}:speechVoice`;
+  const PAUSE_KEY = `memo-management:${REPO}:speechPause`;
   let speaking = false;
   let speechGen = 0; // 読み上げを止めたり始め直したりするたびに増やし、古い発話のイベントを無視する
 
@@ -383,6 +391,8 @@
 
   try { $('speech-rate').value = localStorage.getItem(RATE_KEY) || '1'; } catch {}
   if (!$('speech-rate').value) $('speech-rate').value = '1';
+  try { $('speech-pause').value = localStorage.getItem(PAUSE_KEY) || '800'; } catch {}
+  if (!$('speech-pause').value) $('speech-pause').value = '800';
 
   function loadVoices() {
     const sel = $('speech-voice');
@@ -398,10 +408,10 @@
     synth.addEventListener?.('voiceschanged', loadVoices);
   }
 
-  for (const [id, key] of [['speech-rate', RATE_KEY], ['speech-voice', VOICE_KEY]]) {
+  for (const [id, key] of [['speech-rate', RATE_KEY], ['speech-voice', VOICE_KEY], ['speech-pause', PAUSE_KEY]]) {
     $(id).addEventListener('change', () => {
       try { localStorage.setItem(key, $(id).value); } catch {}
-      if (speaking) startSpeech(); // 今読んでいるページの頭から新しい設定で読み直す
+      if (speaking && id !== 'speech-pause') startSpeech(); // 今読んでいるページの頭から新しい設定で読み直す（間は次の文から反映）
     });
   }
 
@@ -438,7 +448,8 @@
       const c = colAt(chunk.start + e.charIndex);
       if (c !== null && c > page) goTo(c);
     };
-    u.onend = () => speakFrom(chunk.end, gen);
+    // 文を読み終えたら、選んだ間だけ待ってから次の文へ
+    u.onend = () => setTimeout(() => speakFrom(chunk.end, gen), Number($('speech-pause').value) || 0);
     u.onerror = () => { if (gen === speechGen) stopSpeech(); };
     synth.speak(u);
   }

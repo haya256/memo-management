@@ -64,8 +64,9 @@
 </section>
 
 <div id="reader" hidden>
-  <div id="reader-viewport"><div id="reader-content"></div></div>
-  <div id="reader-page"></div>
+  <!-- 今のページより前の文章は読み上げ対象外にして、OS の「画面の読み上げ」が今のページの頭から読むようにする -->
+  <div id="reader-viewport"><div id="reader-content"><span id="reader-before" aria-hidden="true"></span><span id="reader-rest"></span></div></div>
+  <div id="reader-page" aria-hidden="true"></div>
   <div id="reader-menu">
     <span id="reader-title"></span>
     <button class="font-smaller" type="button" aria-label="文字を小さく" title="文字を小さく">A−</button>
@@ -228,27 +229,39 @@
   let anchor = 0;       // 今のページの先頭の文字位置。文字サイズや画面幅が変わってもここを含むページを表示する
   let readerKey = null; // 読んだ位置を保存するキー（メモ名のハッシュ。名前そのものはブラウザに残さない）
   let drag = null;
+  let text = '';        // 表示中のメモの本文
+  let splitAt = 0;      // ここより前は #reader-before（読み上げ対象外）、以降は #reader-rest
 
-  const textLength = () => rc.firstChild?.length ?? 0;
+  const textLength = () => text.length;
+
+  function setSplit(at) {
+    splitAt = at;
+    $('reader-before').textContent = text.slice(0, at);
+    $('reader-rest').textContent = text.slice(at);
+  }
+
+  // 文字 i の画面上の矩形（改行などで位置が取れなければ undefined）
+  function charRect(i) {
+    const [node, j] = i < splitAt ? [$('reader-before').firstChild, i] : [$('reader-rest').firstChild, i - splitAt];
+    range.setStart(node, j);
+    range.setEnd(node, j + 1);
+    return range.getClientRects()[0];
+  }
 
   // 文字 i がある段（ページ）。改行などで位置が取れない文字は次の文字で見る
   function colAt(i) {
-    const node = rc.firstChild, n = textLength(), origin = rc.getBoundingClientRect().left;
+    const n = textLength(), origin = rc.getBoundingClientRect().left;
     for (; i < n; i++) {
-      range.setStart(node, i);
-      range.setEnd(node, i + 1);
-      const r = range.getClientRects()[0];
+      const r = charRect(i);
       if (r) return Math.floor((r.left - origin + 1) / stride);
     }
     return null;
   }
 
   function lastCol() {
-    const node = rc.firstChild, origin = rc.getBoundingClientRect().left;
+    const origin = rc.getBoundingClientRect().left;
     for (let i = textLength() - 1; i >= 0; i--) {
-      range.setStart(node, i);
-      range.setEnd(node, i + 1);
-      const r = range.getClientRects()[0];
+      const r = charRect(i);
       if (r) return Math.floor((r.left - origin + 1) / stride);
     }
     return 0;
@@ -282,6 +295,7 @@
     pages = n ? lastCol() + 1 : 1;
     page = n ? Math.min(pages - 1, colAt(Math.min(anchor, n - 1)) ?? pages - 1) : 0;
     setTranslate(-page * stride, false);
+    setSplit(offsetForPage(page));
     $('reader-page').textContent = `${page + 1} / ${pages}`;
   }
 
@@ -295,6 +309,7 @@
     page = p;
     setTranslate(-page * stride, true);
     anchor = offsetForPage(page);
+    setSplit(anchor);
     $('reader-page').textContent = `${page + 1} / ${pages}`;
     if (readerKey) {
       const positions = loadPositions();
@@ -312,12 +327,15 @@
     const memo = memos[current];
     readerKey = await memoKey(memo.name);
     anchor = Math.min(Number(loadPositions()[readerKey]) || 0, memo.text.length);
-    rc.textContent = memo.text;
+    text = memo.text;
+    setSplit(0);
     $('reader-title').textContent = memo.name;
     $('reader-menu').hidden = false;
     reader.hidden = false;
     readerOn = true;
     document.body.style.overflow = 'hidden';
+    // 後ろに隠れている画面（表示中のメモ全文など）を読み上げ・操作の対象から外す
+    for (const el of document.body.children) if (el !== reader && el.tagName !== 'SCRIPT') el.inert = true;
     document.activeElement?.blur();
     layoutReader();
   }
@@ -327,8 +345,10 @@
     readerOn = false;
     drag = null;
     reader.hidden = true;
-    rc.textContent = '';
+    text = '';
+    setSplit(0);
     document.body.style.overflow = '';
+    for (const el of document.body.children) el.inert = false;
     $('read').focus();
   }
 
@@ -417,7 +437,7 @@
 
   // from 以降の次の 1 文（句点・改行まで。長すぎる文は 200 文字で切る）
   function nextChunk(from) {
-    const t = rc.firstChild?.data ?? '';
+    const t = text;
     let i = from;
     while (i < t.length && /\s/.test(t[i])) i++;
     if (i >= t.length) return null;
@@ -437,7 +457,7 @@
     if (!chunk) return stopSpeech();
     const c = colAt(chunk.start);
     if (c !== null && c > page) goTo(c);
-    const u = new SpeechSynthesisUtterance(rc.firstChild.data.slice(chunk.start, chunk.end));
+    const u = new SpeechSynthesisUtterance(text.slice(chunk.start, chunk.end));
     u.lang = 'ja-JP';
     u.rate = Number($('speech-rate').value) || 1;
     const voice = synth.getVoices().find(v => v.voiceURI === $('speech-voice').value);
